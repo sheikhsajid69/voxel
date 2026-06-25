@@ -20,7 +20,7 @@ Client-side image-to-voxel pipeline converter using WebGL/Three.js.
 
 ## Input Processing Parameters
 
-- Resolution: 8x8 to 48x48 grid matrix
+- Resolution: 8x8 to 64x64 grid matrix
 - Vertical Scaling: 1x to 8x height multiplier
 - Color Mapping Mode: Full RGB, Nearest-Neighbor Euclidean Minecraft 16, Grayscale, Pastel, Warm, Neon
 

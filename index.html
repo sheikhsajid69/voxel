@@ -652,7 +652,7 @@
       <div class="setting-group">
         <label class="setting-label" for="resolution-slider">VOXEL RESOLUTION</label>
         <div class="slider-row">
-          <input type="range" id="resolution-slider" min="8" max="48" value="24" step="4" class="pixel-slider" />
+          <input type="range" id="resolution-slider" min="8" max="64" value="24" step="4" class="pixel-slider" />
           <span id="resolution-val" class="slider-val">24×24</span>
         </div>
       </div>
@@ -764,6 +764,33 @@
         <div id="share-fallback" class="share-fallback" hidden>
           <input id="share-url" class="share-url-input" readonly value="https://sheikhsajid69.github.io/voxel/" aria-label="Shareable Link" />
           <button id="copy-btn" class="copy-btn">COPY</button>
+        </div>
+
+        <div class="panel-divider"></div>
+
+        <!-- Export Embed Code -->
+        <button class="panel-btn btn-secondary" id="export-btn">
+          ⚙ EXPORT CODE
+        </button>
+
+        <div id="export-panel" class="panel-section" style="display: none; margin-top: 8px;">
+          <div class="panel-title">📋 EMBED CODE</div>
+          <div style="display: flex; flex-direction: column; gap: 8px;">
+            <div>
+              <label class="setting-label" for="export-html">HTML EMBED</label>
+              <div style="display: flex; gap: 4px;">
+                <input id="export-html" class="share-url-input" readonly style="font-size: 0.95rem; font-family: var(--font-body);" />
+                <button id="copy-html-btn" class="copy-btn">COPY</button>
+              </div>
+            </div>
+            <div>
+              <label class="setting-label" for="export-md">MARKDOWN LINK</label>
+              <div style="display: flex; gap: 4px;">
+                <input id="export-md" class="share-url-input" readonly style="font-size: 0.95rem; font-family: var(--font-body);" />
+                <button id="copy-md-btn" class="copy-btn">COPY</button>
+              </div>
+            </div>
+          </div>
         </div>
 
       </div>
@@ -962,12 +989,21 @@
 
     // --- STEP 4: Three.js Scene Construction ---
     let scene, camera, renderer, controls;
+    let raycaster, mouse;
     let voxelGroup = null;
     let voxelGroupInitialY = 0;
+    let generationStartTime = 0;
+    let currentVoxelData = null;
     let animationId = null;
     let fpsCounter = { frames: 0, last: Date.now(), fps: 60 };
     let lightingPreset = 0;
     let fogEnabled = true;
+
+    function easeOutBack(x) {
+      const c1 = 1.70158;
+      const c3 = c1 + 1;
+      return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2);
+    }
 
     const lightingPresets = [
       { bg: 0x1a1a2e, fog: 0x1a1a2e, ambient: 0.5, sun: 1.0, fill: 0.3, ground: 0x111111 },   // Night (Deep dark blue sky)
@@ -1049,6 +1085,23 @@
         controls.autoRotate = false;
       });
 
+      // Initialize Raycasting & Mouse Interaction
+      raycaster = new THREE.Raycaster();
+      mouse = new THREE.Vector2(-Infinity, -Infinity);
+
+      const updateMouse = (e) => {
+        const rect = renderer.domElement.getBoundingClientRect();
+        mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+        mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+      };
+      const resetMouse = () => {
+        mouse.set(-Infinity, -Infinity);
+      };
+      canvas.addEventListener('pointermove', updateMouse);
+      canvas.addEventListener('pointerdown', updateMouse);
+      canvas.addEventListener('pointerup', resetMouse);
+      canvas.addEventListener('pointerleave', resetMouse);
+
       // Resize observer
       new ResizeObserver(() => {
         camera.aspect = wrap.clientWidth / wrap.clientHeight;
@@ -1069,7 +1122,18 @@
           matCache[v.color] = new THREE.MeshLambertMaterial({ color: v.color });
         }
         const mesh = new THREE.Mesh(geo, matCache[v.color]);
-        mesh.position.set(v.x, v.y + 0.5, v.z); // offset mesh height by half of voxel size so bottom touches surface locally
+        
+        const targetY = v.y + 0.5;
+        mesh.userData = {
+          targetY: targetY,
+          startY: targetY + 25,
+          entranceDelay: Math.sqrt(v.x**2 + v.z**2) * 20 + Math.random() * 50,
+          hoverScale: 1.0,
+          hoverLift: 0.0
+        };
+
+        // Temporarily set to target coordinates for correct bounding box calculations
+        mesh.position.set(v.x, targetY, v.z);
         mesh.castShadow = true;
         mesh.receiveShadow = true;
         voxelGroup.add(mesh);
@@ -1089,11 +1153,20 @@
         // Update camera target to center of voxel height
         const height = box.max.y - box.min.y;
         controls.target.set(0, height / 2, 0);
+
+        // Shift meshes to starting heights for entrance animation
+        voxelGroup.children.forEach(mesh => {
+          mesh.position.y = mesh.userData.startY;
+          mesh.scale.setScalar(0);
+        });
       } else {
         voxelGroupInitialY = 0;
         scene.add(voxelGroup);
         controls.target.set(0, 5, 0);
       }
+
+      // Record generation start time
+      generationStartTime = Date.now();
 
       // Update stats
       document.getElementById('stat-voxels').textContent = voxelData.voxels.length.toLocaleString();
@@ -1147,9 +1220,52 @@
           document.getElementById('stat-fps').textContent = fpsCounter.fps;
         }
 
-        // Gentle bob animation
+        // Raycast logic for hovering
+        let intersectedObject = null;
+        if (voxelGroup && voxelGroup.children.length > 0 && raycaster) {
+          raycaster.setFromCamera(mouse, camera);
+          const intersects = raycaster.intersectObjects(voxelGroup.children);
+          if (intersects.length > 0) {
+            intersectedObject = intersects[0].object;
+          }
+        }
+
+        // Animations on individual voxels
         if (voxelGroup && voxelGroup.children.length > 0) {
-          voxelGroup.position.y = voxelGroupInitialY + Math.sin(Date.now() * 0.0012) * 0.15 + 0.15;
+          const elapsed = Date.now() - generationStartTime;
+          const duration = 500; // ms
+          const idleTime = Date.now() * 0.0015;
+
+          voxelGroup.children.forEach(mesh => {
+            const delay = mesh.userData.entranceDelay;
+            if (elapsed < delay) {
+              mesh.position.y = mesh.userData.startY;
+              mesh.scale.setScalar(0);
+            } else if (elapsed < delay + duration) {
+              const t = (elapsed - delay) / duration;
+              const ease = easeOutBack(t);
+              mesh.position.y = mesh.userData.startY + (mesh.userData.targetY - mesh.userData.startY) * ease;
+              mesh.scale.setScalar(t);
+            } else {
+              // Idle bobbing + hover pop
+              if (mesh === intersectedObject) {
+                mesh.userData.hoverScale = mesh.userData.hoverScale + (1.25 - mesh.userData.hoverScale) * 0.15;
+                mesh.userData.hoverLift = mesh.userData.hoverLift + (0.4 - mesh.userData.hoverLift) * 0.15;
+              } else {
+                mesh.userData.hoverScale = mesh.userData.hoverScale + (1.0 - mesh.userData.hoverScale) * 0.15;
+                mesh.userData.hoverLift = mesh.userData.hoverLift + (0.0 - mesh.userData.hoverLift) * 0.15;
+              }
+
+              const wave = Math.sin(idleTime + mesh.position.x * 0.15 + mesh.position.z * 0.15) * 0.12;
+              mesh.position.y = mesh.userData.targetY + wave + mesh.userData.hoverLift;
+              mesh.scale.setScalar(mesh.userData.hoverScale);
+            }
+          });
+        }
+
+        // Reset global position y to touch y=0
+        if (voxelGroup) {
+          voxelGroup.position.y = voxelGroupInitialY;
         }
 
         controls.update();
@@ -1194,6 +1310,7 @@
       // Allow UI progress bar to hit 100% and render before blocking calculation
       await new Promise(r => requestAnimationFrame(r));
       const voxelData = sampleImage(loadedImage, resolution, heightScale, palette);
+      currentVoxelData = voxelData;
 
       // Init scene if first run
       if (!renderer) {
@@ -1333,9 +1450,170 @@
       });
     });
 
-    // Auto-load default image on startup
+    // Flat array Base64 grid serialization
+    function encodeScene(voxels, resolution, heightScale) {
+      const grid = [];
+      for (let r = 0; r < resolution; r++) {
+        for (let c = 0; c < resolution; c++) {
+          const colVoxels = voxels.filter(v => v.x === c - resolution / 2 && v.z === r - resolution / 2);
+          if (colVoxels.length === 0) {
+            grid.push(0, 0, 0, 0);
+          } else {
+            const maxH = colVoxels.reduce((max, v) => Math.max(max, v.y), 0) + 1;
+            const color = colVoxels[0].color;
+            grid.push(
+              maxH,
+              (color >> 16) & 255,
+              (color >> 8) & 255,
+              color & 255
+            );
+          }
+        }
+      }
+      const uint8 = new Uint8Array([resolution, heightScale, ...grid]);
+      let binary = '';
+      for (let i = 0; i < uint8.length; i++) {
+        binary += String.fromCharCode(uint8[i]);
+      }
+      return btoa(binary);
+    }
+
+    function loadSceneFromHash(hashData) {
+      try {
+        const binary = atob(hashData);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) {
+          bytes[i] = binary.charCodeAt(i);
+        }
+
+        const resolution = bytes[0];
+        const heightScale = bytes[1];
+        
+        const voxels = [];
+        const uniqueColors = new Set();
+        let idx = 2;
+        
+        for (let r = 0; r < resolution; r++) {
+          for (let c = 0; c < resolution; c++) {
+            const height = bytes[idx];
+            const red = bytes[idx+1];
+            const green = bytes[idx+2];
+            const blue = bytes[idx+3];
+            idx += 4;
+
+            if (height === 0) continue;
+
+            const hexColor = (red << 16) | (green << 8) | blue;
+            uniqueColors.add(hexColor);
+
+            for (let h = 0; h < height; h++) {
+              voxels.push({
+                x: c - resolution / 2,
+                y: h,
+                z: r - resolution / 2,
+                color: hexColor
+              });
+            }
+          }
+        }
+
+        // Set inputs to match
+        document.getElementById('resolution-slider').value = resolution;
+        document.getElementById('resolution-val').textContent = `${resolution}×${resolution}`;
+        document.getElementById('height-slider').value = heightScale;
+        document.getElementById('height-val').textContent = `${heightScale}×`;
+
+        // Render
+        if (!renderer) initScene();
+        currentVoxelData = { voxels, uniqueColors: uniqueColors.size };
+        buildVoxelScene(currentVoxelData);
+        startRenderLoop();
+
+        // Show panel
+        document.getElementById('preview-section').hidden = false;
+        document.getElementById('preview-section').scrollIntoView({ behavior: 'smooth' });
+      } catch (err) {
+        console.error('Failed to load scene from hash:', err);
+        loadDefaultImage('normal.JPG');
+      }
+    }
+
+    // Embed UI check
+    const urlParams = new URLSearchParams(window.location.search);
+    const isEmbed = urlParams.get('embed') === 'true';
+    if (isEmbed) {
+      // Add custom embed stylesheet rules
+      const sheet = document.createElement('style');
+      sheet.innerHTML = `
+        #navbar, #hero, #how-it-works, footer, .section-divider, .preview-heading { display: none !important; }
+        #preview-section { padding: 0 !important; max-width: 100vw !important; margin: 0 !important; }
+        .preview-layout { grid-template-columns: 1fr !important; gap: 0 !important; }
+        .canvas-wrap { aspect-ratio: auto !important; width: 100vw !important; height: 100vh !important; border: none !important; box-shadow: none !important; }
+        .controls-panel { display: none !important; }
+        body { background: transparent !important; overflow: hidden !important; background-image: none !important; }
+      `;
+      document.head.appendChild(sheet);
+    }
+
+    // Export Embed Code button and panel wiring
+    const exportBtn = document.getElementById('export-btn');
+    const exportPanel = document.getElementById('export-panel');
+    const exportHtmlInput = document.getElementById('export-html');
+    const exportMdInput = document.getElementById('export-md');
+
+    exportBtn.addEventListener('click', () => {
+      if (!currentVoxelData) return alert('Generate a scene first to export code.');
+      
+      const resolution = parseInt(document.getElementById('resolution-slider').value);
+      const heightScale = parseInt(document.getElementById('height-slider').value);
+      const sceneData = encodeScene(currentVoxelData.voxels, resolution, heightScale);
+      
+      // Determine sharing URL (falling back to deployed standard if local file context)
+      let baseShareUrl = window.location.origin + window.location.pathname;
+      if (window.location.protocol === 'file:') {
+        baseShareUrl = 'https://sheikhsajid69.github.io/voxel/';
+      }
+      
+      const shareUrl = `${baseShareUrl}#scene=${sceneData}`;
+      const embedUrl = `${baseShareUrl}?embed=true#scene=${sceneData}`;
+
+      const htmlEmbed = `<iframe src="${embedUrl}" width="100%" height="450px" style="border: 4px solid #1a1a1a; box-shadow: 0 8px 16px rgba(0,0,0,0.5);" allowfullscreen></iframe>`;
+      const mdEmbed = `[![My Voxel Art](${baseShareUrl}voxel-logo.png)](${shareUrl})`;
+
+      exportHtmlInput.value = htmlEmbed;
+      exportMdInput.value = mdEmbed;
+
+      exportPanel.style.display = exportPanel.style.display === 'none' ? 'block' : 'none';
+      if (exportPanel.style.display === 'block') {
+        exportPanel.scrollIntoView({ behavior: 'smooth' });
+      }
+    });
+
+    // Copy event handlers
+    document.getElementById('copy-html-btn').addEventListener('click', () => {
+      exportHtmlInput.select();
+      navigator.clipboard.writeText(exportHtmlInput.value).then(() => {
+        const btn = document.getElementById('copy-html-btn');
+        btn.textContent = 'COPIED!';
+        setTimeout(() => { btn.textContent = 'COPY'; }, 2000);
+      });
+    });
+    document.getElementById('copy-md-btn').addEventListener('click', () => {
+      exportMdInput.select();
+      navigator.clipboard.writeText(exportMdInput.value).then(() => {
+        const btn = document.getElementById('copy-md-btn');
+        btn.textContent = 'COPIED!';
+        setTimeout(() => { btn.textContent = 'COPY'; }, 2000);
+      });
+    });
+
+    // Auto-load default image or hash-encoded scene on startup
     window.addEventListener('DOMContentLoaded', () => {
-      loadDefaultImage('normal.JPG');
+      if (window.location.hash && window.location.hash.startsWith('#scene=')) {
+        loadSceneFromHash(window.location.hash.substring(7));
+      } else {
+        loadDefaultImage('normal.JPG');
+      }
     });
 
     function loadDefaultImage(src) {
