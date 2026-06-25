@@ -1332,6 +1332,27 @@
         setTimeout(() => { btn.textContent = 'COPY'; }, 2000);
       });
     });
+
+    // Auto-load default image on startup
+    window.addEventListener('DOMContentLoaded', () => {
+      loadDefaultImage('normal.JPG');
+    });
+
+    function loadDefaultImage(src) {
+      loadedImage = new Image();
+      loadedImage.onload = () => {
+        previewImg.src = src;
+        previewImg.hidden = false;
+        dropInner.hidden = true;
+        dropOverlay.hidden = false;
+        settingsRow.hidden = false;
+        voxelizeBtn.disabled = false;
+      };
+      loadedImage.onerror = () => {
+        console.warn('Default image failed to load:', src);
+      };
+      loadedImage.src = src;
+    }
   </script>
 </body>
 </html>
