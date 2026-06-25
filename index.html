@@ -789,6 +789,9 @@
                 <input id="export-md" class="share-url-input" readonly style="font-size: 0.95rem; font-family: var(--font-body);" />
                 <button id="copy-md-btn" class="copy-btn">COPY</button>
               </div>
+              <span class="setting-label" style="margin-top: 6px; display: block; font-family: var(--font-body); font-size: 1.15rem; color: var(--gold); text-transform: none; line-height: 1.3;">
+                * Download your PNG, save it as "voxel-art.png" in your project folder, and commit it to preview your custom art.
+              </span>
             </div>
           </div>
         </div>
@@ -1578,7 +1581,7 @@
       const embedUrl = `${baseShareUrl}?embed=true#scene=${sceneData}`;
 
       const htmlEmbed = `<iframe src="${embedUrl}" width="100%" height="450px" style="border: 4px solid #1a1a1a; box-shadow: 0 8px 16px rgba(0,0,0,0.5);" allowfullscreen></iframe>`;
-      const mdEmbed = `[![My Voxel Art](${baseShareUrl}voxel-logo.png)](${shareUrl})`;
+      const mdEmbed = `[![My Voxel Art](./voxel-art.png)](${shareUrl})`;
 
       exportHtmlInput.value = htmlEmbed;
       exportMdInput.value = mdEmbed;
